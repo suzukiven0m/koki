@@ -1,6 +1,7 @@
 use std::{collections::HashMap, fmt, str::FromStr};
 
 use anyhow::Result;
+use chrono::Local;
 use clap::Parser;
 use futures_lite::StreamExt;
 use iroh::{protocol::Router, Endpoint, EndpointAddr, EndpointId, endpoint::presets};
@@ -11,6 +12,10 @@ use iroh_gossip::{
 };
 use rand::RngExt;
 use serde::{Deserialize, Serialize};
+
+fn timestamp() -> String {
+    Local::now().format("[%H:%M:%S]").to_string()
+}
 
 const ADJECTIVES: &[&str] = &[
     "anonymous", "brave", "calm", "clever", "eager",
@@ -57,19 +62,19 @@ async fn main() -> Result<()> {
     let (topic, endpoints) = match &args.command {
         Command::Open => {
             let topic = TopicId::from_bytes(rand::random());
-            println!("> opening chat room for topic {topic}");
+            println!("{} > opening chat room for topic {topic}", timestamp());
             (topic, vec![])
         }
         Command::Join { ticket } => {
             let Ticket { topic, endpoints } = Ticket::from_str(ticket)?;
-            println!("> joining chat room for topic {topic}");
+            println!("{} > joining chat room for topic {topic}", timestamp());
             (topic, endpoints)
         }
     };
 
     let endpoint = Endpoint::bind(presets::N0).await?;
 
-    println!("> our endpoint id: {}", endpoint.id());
+    println!("{} > our endpoint id: {}", timestamp(), endpoint.id());
     let gossip = Gossip::builder().spawn(endpoint.clone());
 
     let router = Router::builder(endpoint.clone())
@@ -81,21 +86,21 @@ async fn main() -> Result<()> {
         let endpoints = vec![me];
         Ticket { topic, endpoints }
     };
-    println!("> ticket to join us: {ticket}");
+    println!("{} > ticket to join us: {ticket}", timestamp());
 
     let endpoint_ids = endpoints.iter().map(|p| p.id).collect();
     if endpoints.is_empty() {
-        println!("> waiting for endpoints to join us...");
+        println!("{} > waiting for endpoints to join us...", timestamp());
     } else {
-        println!("> trying to connect to {} endpoints...", endpoints.len());
+        println!("{} > trying to connect to {} endpoints...", timestamp(), endpoints.len());
     };
     let (sender, receiver) = gossip.subscribe_and_join(topic, endpoint_ids).await?.split();
     println!("> connected!");
 
-    let name = args.name.unwrap_or_else(generate_name);
+    let local_name = args.name.unwrap_or_else(generate_name);
     let message = Message::new(MessageBody::AboutMe {
         from: endpoint.id(),
-        name,
+        name: local_name.clone(),
     });
     sender.broadcast(message.to_vec().into()).await?;
 
@@ -111,7 +116,7 @@ async fn main() -> Result<()> {
             text: text.clone(),
         });
         sender.broadcast(message.to_vec().into()).await?;
-        println!("> sent: {text}");
+        println!("> {local_name}: {text}");
     }
 
     router.shutdown().await?;
