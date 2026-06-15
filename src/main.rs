@@ -66,7 +66,14 @@ async fn main() -> Result<()> {
             (topic, vec![])
         }
         Command::Join { ticket } => {
-            let Ticket { topic, endpoints } = Ticket::from_str(ticket)?;
+            let Ticket { topic, endpoints } = match Ticket::from_str(ticket) {
+                Ok(t) => t,
+                Err(e) => {
+                    eprintln!("> error: invalid ticket format — {e}");
+                    eprintln!("> expected a base32-encoded ticket string");
+                    std::process::exit(1);
+                }
+            };
             println!("{} > joining chat room for topic {topic}", timestamp());
             (topic, endpoints)
         }
@@ -95,7 +102,7 @@ async fn main() -> Result<()> {
         println!("{} > trying to connect to {} endpoints...", timestamp(), endpoints.len());
     };
     let (sender, receiver) = gossip.subscribe_and_join(topic, endpoint_ids).await?.split();
-    println!("> connected!");
+    println!("{} > connected!", timestamp());
 
     let local_name = args.name.unwrap_or_else(generate_name);
     let message = Message::new(MessageBody::AboutMe {
@@ -109,14 +116,29 @@ async fn main() -> Result<()> {
     let (line_tx, mut line_rx) = tokio::sync::mpsc::channel(1);
     std::thread::spawn(move || input_loop(line_tx));
 
-    println!("> type a message and hit enter to broadcast...");
-    while let Some(text) = line_rx.recv().await {
-        let message = Message::new(MessageBody::Message {
-            from: endpoint.id(),
-            text: text.clone(),
-        });
-        sender.broadcast(message.to_vec().into()).await?;
-        println!("> {local_name}: {text}");
+    println!("{} > type a message and hit enter to broadcast...", timestamp());
+    loop {
+        tokio::select! {
+            text = line_rx.recv() => {
+                match text {
+                    Some(text) => {
+                        let message = Message::new(MessageBody::Message {
+                            from: endpoint.id(),
+                            text: text.clone(),
+                        });
+                        sender.broadcast(message.to_vec().into()).await?;
+                        println!("{} > {local_name}: {text}", timestamp());
+                    }
+                    None => break,
+                }
+            }
+            _ = tokio::signal::ctrl_c() => {
+                println!();
+                println!("> shutting down...");
+                drop(sender);
+                break;
+            }
+        }
     }
 
     router.shutdown().await?;
@@ -160,13 +182,13 @@ async fn subscribe_loop(mut receiver: GossipReceiver) -> Result<()> {
             match Message::from_bytes(&msg.content)?.body {
                 MessageBody::AboutMe { from, name } => {
                     names.insert(from, name.clone());
-                    println!("> {} is now known as {}", from.fmt_short(), name);
+                    println!("{} > {} is now known as {}", timestamp(), from.fmt_short(), name);
                 }
                 MessageBody::Message { from, text } => {
                     let name = names
                         .get(&from)
                         .map_or_else(|| from.fmt_short().to_string(), String::to_string);
-                    println!("{name}: {text}");
+                    println!("{} {name}: {text}", timestamp());
                 }
             }
         }
@@ -179,7 +201,12 @@ fn input_loop(line_tx: tokio::sync::mpsc::Sender<String>) -> Result<()> {
     let stdin = std::io::stdin();
     loop {
         stdin.read_line(&mut buffer)?;
-        line_tx.blocking_send(buffer.clone())?;
+        let line = buffer.trim_end().to_string();
+        if line.is_empty() {
+            buffer.clear();
+            continue;
+        }
+        line_tx.blocking_send(line)?;
         buffer.clear();
     }
 }
