@@ -4,7 +4,7 @@ use anyhow::Result;
 use chrono::Local;
 use clap::Parser;
 use futures_lite::StreamExt;
-use iroh::{protocol::Router, Endpoint, EndpointAddr, EndpointId, endpoint::presets};
+use iroh::{protocol::Router, Endpoint, EndpointAddr, EndpointId, endpoint::presets, Watcher};
 use iroh_gossip::{
     api::{Event, GossipReceiver},
     net::Gossip,
@@ -91,10 +91,21 @@ async fn main() -> Result<()> {
         .accept(iroh_gossip::ALPN, gossip.clone())
         .spawn();
 
+    // Wait for relay discovery so the ticket is actually dialable.
+    println!("{} > waiting for relay discovery...", timestamp());
+    let mut addr_watcher = endpoint.watch_addr();
+    loop {
+        let addr = addr_watcher.get();
+        if addr.relay_urls().next().is_some() {
+            println!("{} > relay discovered!", timestamp());
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
+
     let ticket = {
-        let me = endpoint.addr();
-        let endpoints = vec![me];
-        Ticket { topic, endpoints }
+        let me = addr_watcher.get();
+        Ticket { topic, endpoints: vec![me] }
     };
     println!("{} > ticket to join us: {ticket}", timestamp());
 
