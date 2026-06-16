@@ -4,7 +4,7 @@ use anyhow::Result;
 use chrono::Local;
 use clap::Parser;
 use futures_lite::StreamExt;
-use iroh::{protocol::Router, Endpoint, EndpointAddr, EndpointId, endpoint::presets, Watcher};
+use iroh::{protocol::Router, Endpoint, EndpointAddr, EndpointId, endpoint::presets, Watcher, address_lookup::memory::MemoryLookup};
 use iroh_gossip::{
     api::{Event, GossipReceiver},
     net::Gossip,
@@ -90,6 +90,18 @@ async fn main() -> Result<()> {
     let router = Router::builder(endpoint.clone())
         .accept(iroh_gossip::ALPN, gossip.clone())
         .spawn();
+
+    // For the joiner: feed the ticket's EndpointAddr (with relay URL) into the
+    // endpoint's address lookup so gossip can find the peer immediately.
+    if !endpoints.is_empty() {
+        let mem = MemoryLookup::new();
+        for ep_addr in &endpoints {
+            mem.add_endpoint_info(ep_addr.clone());
+        }
+        if let Ok(services) = endpoint.address_lookup() {
+            services.add(mem);
+        }
+    }
 
     // Wait for relay discovery so the ticket is actually dialable.
     println!("{} > waiting for relay discovery...", timestamp());
