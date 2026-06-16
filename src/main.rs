@@ -41,8 +41,6 @@ fn generate_name() -> String {
 
 #[derive(Parser, Debug)]
 struct Args {
-    #[clap(short, long)]
-    name: Option<String>,
     #[clap(short, long, default_value = "0")]
     bind_port: u16,
     #[clap(subcommand)]
@@ -51,7 +49,10 @@ struct Args {
 
 #[derive(Parser, Debug)]
 enum Command {
-    Open,
+    Open {
+        #[clap(short, long)]
+        name: Option<String>,
+    },
     Join { ticket: String },
 }
 
@@ -59,11 +60,12 @@ enum Command {
 async fn main() -> Result<()> {
     let args = Args::parse();
 
-    let (topic, endpoints) = match &args.command {
-        Command::Open => {
+    let (topic, endpoints, local_name) = match &args.command {
+        Command::Open { name } => {
             let topic = TopicId::from_bytes(rand::random());
             println!("{} > opening chat room for topic {topic}", timestamp());
-            (topic, vec![])
+            let local_name = name.clone().unwrap_or_else(generate_name);
+            (topic, vec![], local_name)
         }
         Command::Join { ticket } => {
             let Ticket { topic, endpoints } = match Ticket::from_str(ticket) {
@@ -75,7 +77,8 @@ async fn main() -> Result<()> {
                 }
             };
             println!("{} > joining chat room for topic {topic}", timestamp());
-            (topic, endpoints)
+            let local_name = generate_name();
+            (topic, endpoints, local_name)
         }
     };
 
@@ -104,7 +107,6 @@ async fn main() -> Result<()> {
     let (sender, receiver) = gossip.subscribe_and_join(topic, endpoint_ids).await?.split();
     println!("{} > connected!", timestamp());
 
-    let local_name = args.name.unwrap_or_else(generate_name);
     let message = Message::new(MessageBody::AboutMe {
         from: endpoint.id(),
         name: local_name.clone(),
